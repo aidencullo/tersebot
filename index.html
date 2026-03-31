@@ -30,6 +30,40 @@
       font-size: 0.75rem;
       margin-top: 0.3rem;
     }
+    #key-bar {
+      width: 100%;
+      max-width: 600px;
+      padding: 0.5rem 1rem;
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    #key-bar input {
+      flex: 1;
+      background: #111;
+      border: 1px solid #1a1a2e;
+      color: #555;
+      padding: 0.5rem 0.8rem;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 0.75rem;
+      outline: none;
+    }
+    #key-bar input:focus { border-color: #333; }
+    #key-bar input::placeholder { color: #2a2a2a; }
+    #key-bar label {
+      color: #333;
+      font-size: 0.7rem;
+      white-space: nowrap;
+    }
+    #key-bar .status {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #333;
+      flex-shrink: 0;
+    }
+    #key-bar .status.ok { background: #4a7; }
     #chat {
       flex: 1;
       width: 100%;
@@ -56,6 +90,12 @@
       align-self: flex-start;
       background: #1a1a1a;
       color: #aaa;
+    }
+    .msg.bot.error {
+      color: #a55;
+    }
+    .msg.bot.typing {
+      color: #555;
     }
     #input-bar {
       width: 100%;
@@ -88,6 +128,7 @@
       cursor: pointer;
     }
     #input-bar button:hover { background: #222240; }
+    #input-bar button:disabled { opacity: 0.3; cursor: default; }
     #chat::-webkit-scrollbar { width: 4px; }
     #chat::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
   </style>
@@ -97,65 +138,37 @@
     <h1>TERSEBOT</h1>
     <p>brevity is the soul of wit</p>
   </header>
+  <div id="key-bar">
+    <label>API key</label>
+    <input id="apikey" type="password" placeholder="sk-ant-..." autocomplete="off" />
+    <div class="status" id="status"></div>
+  </div>
   <div id="chat"></div>
   <div id="input-bar">
     <input id="msg" type="text" placeholder="say something..." autocomplete="off" />
-    <button onclick="send()">></button>
+    <button id="sendbtn" onclick="send()">></button>
   </div>
   <script>
+    const PROXY = 'https://tersebot-proxy.aidencullo.workers.dev';
     const chat = document.getElementById('chat');
     const input = document.getElementById('msg');
+    const apiKeyInput = document.getElementById('apikey');
+    const statusDot = document.getElementById('status');
+    const sendBtn = document.getElementById('sendbtn');
+    const history = [];
+    let busy = false;
 
-    const responses = {
-      greetings: ["hey.", "hi.", "yo.", "sup.", "'ello."],
-      farewells: ["bye.", "later.", "peace.", "cya.", "adios."],
-      questions: [
-        "probably.", "nah.", "depends.", "yes.", "no.", "maybe.",
-        "doubt it.", "sure.", "why not.", "hard pass.", "obviously.",
-        "wouldn't bet on it.", "100%.", "ask again later.", "if you say so."
-      ],
-      feelings: [
-        "same.", "rough.", "it happens.", "felt that.", "mood.",
-        "hang in there.", "been there.", "valid."
-      ],
-      tech: [
-        "just rewrite it.", "have you tried turning it off and on.",
-        "skill issue.", "works on my machine.", "read the docs.",
-        "it's always DNS.", "ship it.", "LGTM."
-      ],
-      existential: [
-        "don't overthink it.", "nobody knows.", "does it matter.",
-        "we're all just winging it.", "the void doesn't answer back."
-      ],
-      compliments: [
-        "thanks I guess.", "noted.", "cool.", "appreciated.", "right back at you."
-      ],
-      fallback: [
-        "noted.", "interesting.", "ok.", "sure.", "hm.", "if you say so.",
-        "cool.", "right.", "fair enough.", "k.", "got it.", "wild.",
-        "that's one way to look at it.", "I see.", "bold take.",
-        "mhm.", "go on.", "riveting.", "truly.", "wow.", "neat."
-      ]
-    };
-
-    const patterns = [
-      { test: /^(hey|hi|hello|sup|yo|howdy|hola|greetings)/i, key: 'greetings' },
-      { test: /^(bye|goodbye|later|cya|adios|peace out|see ya)/i, key: 'farewells' },
-      { test: /\?$/, key: 'questions' },
-      { test: /(feel|sad|happy|angry|tired|bored|stressed|anxious|depressed|lonely)/i, key: 'feelings' },
-      { test: /(code|bug|error|deploy|server|api|database|css|javascript|python|react|git)/i, key: 'tech' },
-      { test: /(meaning|life|purpose|why are we|exist|universe|reality|consciousness)/i, key: 'existential' },
-      { test: /(good|great|nice|awesome|amazing|love|best|cool|smart|impressive)/i, key: 'compliments' },
-    ];
-
-    function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-
-    function getReply(text) {
-      for (const p of patterns) {
-        if (p.test.test(text)) return pick(responses[p.key]);
-      }
-      return pick(responses.fallback);
+    // persist key in localStorage
+    const saved = localStorage.getItem('tersebot-key');
+    if (saved) {
+      apiKeyInput.value = saved;
+      statusDot.classList.add('ok');
     }
+    apiKeyInput.addEventListener('input', () => {
+      const k = apiKeyInput.value.trim();
+      localStorage.setItem('tersebot-key', k);
+      statusDot.classList.toggle('ok', k.startsWith('sk-ant-'));
+    });
 
     function addMsg(text, cls) {
       const el = document.createElement('div');
@@ -163,14 +176,46 @@
       el.textContent = text;
       chat.appendChild(el);
       chat.scrollTop = chat.scrollHeight;
+      return el;
     }
 
-    function send() {
+    async function send() {
       const text = input.value.trim();
-      if (!text) return;
+      const key = apiKeyInput.value.trim();
+      if (!text || busy) return;
+      if (!key) { addMsg('enter your anthropic API key above.', 'bot error'); return; }
+
       addMsg(text, 'user');
+      history.push({ role: 'user', content: text });
       input.value = '';
-      setTimeout(() => addMsg(getReply(text), 'bot'), 300 + Math.random() * 400);
+      busy = true;
+      sendBtn.disabled = true;
+
+      const typing = addMsg('...', 'bot typing');
+
+      try {
+        const resp = await fetch(PROXY, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': key },
+          body: JSON.stringify({ messages: history }),
+        });
+        const data = await resp.json();
+        typing.remove();
+
+        if (data.error) {
+          addMsg(data.error.message || 'something went wrong.', 'bot error');
+        } else {
+          const reply = data.content[0].text;
+          history.push({ role: 'assistant', content: reply });
+          addMsg(reply, 'bot');
+        }
+      } catch (e) {
+        typing.remove();
+        addMsg('network error.', 'bot error');
+      }
+
+      busy = false;
+      sendBtn.disabled = false;
     }
 
     input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
